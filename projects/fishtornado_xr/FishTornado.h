@@ -23,9 +23,12 @@
 #include "Shark.h"
 
 #include "ppx/ppx.h"
+#include "ppx/metrics.h"
 #include "ppx/camera.h"
 
 #include <filesystem>
+#include <vector>
+#include <memory>
 
 #if defined(USE_DX12)
 const grfx::Api kApi = grfx::API_DX_12_0;
@@ -46,6 +49,7 @@ struct FishTornadoSettings
     uint32_t fishResY                 = kDefaultFishResY;
     uint32_t fishThreadsX             = kDefaultFishThreadsX;
     uint32_t fishThreadsY             = kDefaultFishThreadsY;
+    bool     outputMetrics            = false;
 };
 
 class FishTornadoApp
@@ -146,6 +150,10 @@ private:
     int                                   mViewCount                = 1;
     std::vector<uint64_t>                 mViewGpuFrameTime         = {};
     std::vector<grfx::PipelineStatistics> mViewPipelineStatistics   = {};
+    ppx::metrics::Manager                 mMetricsManager;
+    ppx::metrics::MetricGauge*            pGpuFrameTimeGauge = nullptr;
+    ppx::metrics::MetricGauge*            pCpuFrameTimeGauge = nullptr;
+    float                                 mLastMetricsWriteTime = 0;
 
 private:
     void SetupDescriptorPool();
@@ -156,6 +164,7 @@ private:
     void SetupPerFrame();
     void SetupCaustics();
     void SetupDebug();
+    void SetupMetrics();
     void SetupScene();
     void UploadCaustics();
     void UpdateTime();
@@ -175,6 +184,7 @@ private:
         grfx::SwapchainPtr& swapchain,
         uint32_t            imageIndex);
     void DrawGui();
+    void WriteMetrics();
 };
 
 #endif // FISHTORNADO_H

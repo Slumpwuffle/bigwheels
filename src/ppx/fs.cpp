@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "ppx/fs.h"
+#include "ppx/config.h"
 
 #include <filesystem>
 #include <vector>
@@ -144,5 +145,43 @@ bool path_exists(const std::filesystem::path& path)
     return std::filesystem::exists(path);
 #endif
 }
+
+std::filesystem::path GetValidPathToFile(const std::filesystem::path& path)
+{
+    PPX_ASSERT_MSG(path.is_relative(), "Only relative paths are valid for files.");
+#if defined(PPX_ANDROID)
+    // The internal data path on Android is extremely limited in terms of filesize.
+    std::filesystem::path internalDataPath(gAndroidContext->activity->internalDataPath);
+    std::filesystem::path outputPath = internalDataPath / path;
+    std::filesystem::create_directories(outputPath.parent_path());
+    return outputPath;
+#else
+    std::filesystem::create_directories(path.parent_path());
+    return path;
+#endif
+}
+
+/*
+// Simple wrapper for writing provided data into a file. Path must be relative; not intended for complex or  large file output.
+bool Writefile(const std::filesystem::path& path, const char* buf, size_t count) {
+    if (!path.is_relative()) {
+        // Only relative paths are supported with this function.
+        return false;
+    }
+#if defined(PPX_ANDROID)
+    // The internal data path on Android is extremely limited in terms of filesize.
+    std::filesystem::path internalDataPath(gAndroidContext->activity->internalDataPath);
+    std::filesystem::path outputPath = internalDataPath / path;
+    std::filesystem::create_directories(outputPath.parent_path());
+#else
+    std::filesystem::create_directories(path.parent_path());
+    auto outputPath = path;
+#endif
+    std::ofstream outFile(outputPath, std::ios::binary);
+    outFile.write(buf, count);
+    outFile.close();
+    return (outFile.rdstate() == std::ios_base::goodbit);
+}
+*/
 
 } // namespace ppx::fs

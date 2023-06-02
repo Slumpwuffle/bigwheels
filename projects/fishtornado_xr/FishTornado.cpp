@@ -14,16 +14,23 @@
 
 #include "FishTornado.h"
 #include "ppx/graphics_util.h"
+#include "ppx/csv_file_log.h"
+#include "ppx/fs.h"
 
 #include <filesystem>
 
-#define kShadowRes          1024
-#define kCausticsImageCount 32
-
 #define ENABLE_GPU_QUERIES
 
-static const float3 kFogColor   = float3(15.0f, 86.0f, 107.0f) / 255.0f;
-static const float3 kFloorColor = float3(145.0f, 189.0f, 155.0f) / 255.0f;
+namespace {
+
+constexpr uint32_t kShadowRes = 1024;
+constexpr uint32_t kCausticsImageCount = 32;
+constexpr float3 kFogColor   = float3(15.0f, 86.0f, 107.0f) / 255.0f;
+constexpr float3 kFloorColor = float3(145.0f, 189.0f, 155.0f) / 255.0f;
+constexpr float kMetricsWritePeriod = 5.f;
+constexpr char kMetricsFilename[] = "ft_metrics.csv";
+
+}
 
 FishTornadoApp* FishTornadoApp::GetThisApp()
 {
@@ -423,6 +430,7 @@ void FishTornadoApp::Setup()
     mSettings.renderOcean              = !(clOptions.HasExtraOption("ft-disable-ocean") && clOptions.GetExtraOptionValueOrDefault<bool>("ft-disable-ocean", true));
     mSettings.renderShark              = !(clOptions.HasExtraOption("ft-disable-shark") && clOptions.GetExtraOptionValueOrDefault<bool>("ft-disable-shark", true));
     mSettings.useTracking              = !(clOptions.HasExtraOption("ft-disable-tracking") && clOptions.GetExtraOptionValueOrDefault<bool>("ft-disable-tracking", true));
+    mSettings.outputMetrics            = (clOptions.HasExtraOption("ft-enable-stats") && clOptions.GetExtraOptionValueOrDefault<bool>("ft-enable-metrics", true));
 
     mSettings.fishResX = clOptions.GetExtraOptionValueOrDefault<uint32_t>("ft-fish-res-x", kDefaultFishResX);
     PPX_ASSERT_MSG(mSettings.fishResX < 65536, "Fish X resolution out-of-range.");
@@ -441,6 +449,7 @@ void FishTornadoApp::Setup()
     SetupPerFrame();
     SetupCaustics();
     SetupDebug();
+    SetupMetrics();
 
     const uint32_t numFramesInFlight = GetNumFramesInFlight();
     // Always setup all elements of the scene, even if they're not in use.
@@ -1163,9 +1172,18 @@ void FishTornadoApp::DrawGui()
 
         ImGui::Columns(2);
 
+        float prevGpuFrameTime = static_cast<float>(totalGpuFrameTime / static_cast<double>(frequency)) * 1000.0f;
+        if (mSettings.outputMetrics) {
+            auto now = GetElapsedSeconds();
+            auto prevCpuFrameTime = GetPrevFrameTime();
+            pGpuFrameTimeGauge->RecordEntry(now, prevGpuFrameTime);
+            pCpuFrameTimeGauge->RecordEntry(now, prevCpuFrameTime);
+            WriteMetrics();
+        }
+
         ImGui::Text("Previous GPU Frame Time");
         ImGui::NextColumn();
-        ImGui::Text("%f ms ", static_cast<float>(totalGpuFrameTime / static_cast<double>(frequency)) * 1000.0f);
+        ImGui::Text("%f ms ", prevGpuFrameTime);
         ImGui::NextColumn();
 
         ImGui::Separator();
@@ -1228,4 +1246,114 @@ void FishTornadoApp::DrawGui()
     if (mSettings.forceSingleCommandBuffer) {
         ImGui::EndDisabled();
     }
+}
+
+void FishTornadoApp::SetupMetrics() {
+    auto* run = mMetricsManager.AddRun("FishTornado Metrics");
+
+    pGpuFrameTimeGauge = run->AddMetric<ppx::metrics::MetricGauge>({"GPU Frame Time", "ms", ppx::metrics::MetricInterpretation::LOWER_IS_BETTER, {0.f, 60000.f}});
+    pCpuFrameTimeGauge = run->AddMetric<ppx::metrics::MetricGauge>({"CPU Frame Time", "ms", ppx::metrics::MetricInterpretation::LOWER_IS_BETTER, {0.f, 60000.f}});
+
+    /*
+    auto validPath = ppx::fs::GetValidPathToFile(std::filesystem::path(kMetricsFilename))
+    metricsFileLog = ppx::CSVFileLog(validPath.c_str());
+    metricsFileLog.LogField("GPU Min");
+    metricsFileLog.LogField("GPU Max");
+    metricsFileLog.LogField("GPU Median");
+    metricsFileLog.LogField("GPU P90");
+    metricsFileLog.LogField("GPU P95");
+    metricsFileLog.LogField("GPU P99");
+
+    metricsFileLog.LogField("CPU Min");
+    metricsFileLog.LogField("CPU Max");
+    metricsFileLog.LogField("CPU Median");
+    metricsFileLog.LogField("CPU P90");
+    metricsFileLog.LogField("CPU P95");
+    metricsFileLog.LastField("CPU P99");
+    */
+}
+
+void FishTornadoApp::WriteMetrics() {
+    auto now = GetElapsedSeconds();
+    if (now - mLastMetricsWriteTime < kMetricsWritePeriod) {
+        return;
+    }
+    mLastMetricsWriteTime = now;
+
+    auto validPath = ppx::fs::GetValidPathToFile(std::filesystem::path(kMetricsFilename));
+    ppx::CSVFileLog metricsFileLog(validPath.c_str());
+    metricsFileLog.LogField("GPU Min");
+    metricsFileLog.LogField("GPU Max");
+    metricsFileLog.LogField("GPU Mean");
+    metricsFileLog.LogField("GPU Median");
+    metricsFileLog.LogField("GPU P90");
+    metricsFileLog.LogField("GPU P95");
+    metricsFileLog.LogField("GPU P99");
+    metricsFileLog.LogField("GPU StdDev");
+
+    metricsFileLog.LogField("CPU Min");
+    metricsFileLog.LogField("CPU Max");
+    metricsFileLog.LogField("CPU Mean");
+    metricsFileLog.LogField("CPU Median");
+    metricsFileLog.LogField("CPU P90");
+    metricsFileLog.LogField("CPU P95");
+    metricsFileLog.LastField("CPU P99");
+    metricsFileLog.LastField("CPU StdDev");
+
+    auto basicGpu = pGpuFrameTimeGauge->GetBasicStatistics();
+    auto complexGpu = pGpuFrameTimeGauge->ComputeComplexStatistics();
+    auto basicCpu = pCpuFrameTimeGauge->GetBasicStatistics();
+    auto complexCpu = pCpuFrameTimeGauge->ComputeComplexStatistics();
+
+    metricsFileLog.LogField(basicGpu.min);
+    metricsFileLog.LogField(basicGpu.max);
+    metricsFileLog.LogField(basicGpu.average);
+    metricsFileLog.LogField(complexGpu.median);
+    metricsFileLog.LogField(complexGpu.percentile90);
+    metricsFileLog.LogField(complexGpu.percentile95);
+    metricsFileLog.LogField(complexGpu.percentile99);
+    metricsFileLog.LogField(complexGpu.standardDeviation);
+
+    metricsFileLog.LogField(basicCpu.min);
+    metricsFileLog.LogField(basicCpu.max);
+    metricsFileLog.LogField(basicCpu.average);
+    metricsFileLog.LogField(complexCpu.median);
+    metricsFileLog.LogField(complexCpu.percentile90);
+    metricsFileLog.LogField(complexCpu.percentile95);
+    metricsFileLog.LogField(complexCpu.percentile99);
+    metricsFileLog.LastField(complexCpu.standardDeviation);
+/*
+    std::sort(mPrevCpuFrameTimes.begin(), mPrevCpuFrameTimes.end());
+    std::sort(mPrevGpuFrameTimes.begin(), mPrevGpuFrameTimes.end());
+
+    float cpuFrameP01 = mPrevCpuFrameTimes[static_cast<int>(0.01f * mPrevCpuFrameTimes.size())];
+    float cpuFrameP05 = mPrevCpuFrameTimes[static_cast<int>(0.05f * mPrevCpuFrameTimes.size())];
+    float cpuFrameP50 = mPrevCpuFrameTimes[static_cast<int>(0.50f * mPrevCpuFrameTimes.size())];
+    float cpuFrameP95 = mPrevCpuFrameTimes[static_cast<int>(0.95f * mPrevCpuFrameTimes.size())];
+    float cpuFrameP99 = mPrevCpuFrameTimes[static_cast<int>(0.99f * mPrevCpuFrameTimes.size())];
+
+    float gpuFrameP01 = mPrevGpuFrameTimes[static_cast<int>(0.05f * mPrevGpuFrameTimes.size())];
+    float gpuFrameP05 = mPrevGpuFrameTimes[static_cast<int>(0.01f * mPrevGpuFrameTimes.size())];
+    float gpuFrameP50 = mPrevGpuFrameTimes[static_cast<int>(0.50f * mPrevGpuFrameTimes.size())];
+    float gpuFrameP95 = mPrevGpuFrameTimes[static_cast<int>(0.95f * mPrevGpuFrameTimes.size())];
+    float gpuFrameP99 = mPrevGpuFrameTimes[static_cast<int>(0.99f * mPrevGpuFrameTimes.size())];
+
+    std::stringstream outFile;
+    outFile << "cpu: " << std::endl;
+    outFile << "p01: " << cpuFrameP01 << std::endl;
+    outFile << "p05: " << cpuFrameP05 << std::endl;
+    outFile << "p50: " << cpuFrameP50 << std::endl;
+    outFile << "p95: " << cpuFrameP95 << std::endl;
+    outFile << "p99: " << cpuFrameP99 << std::endl;
+    outFile << std::endl;
+    outFile << "gpu: " << std::endl;
+    outFile << "p01: " << gpuFrameP01 << std::endl;
+    outFile << "p05: " << gpuFrameP05 << std::endl;
+    outFile << "p50: " << gpuFrameP50 << std::endl;
+    outFile << "p95: " << gpuFrameP95 << std::endl;
+    outFile << "p99: " << gpuFrameP99 << std::endl;
+    auto outFileString = outFile.str();
+    auto res = ppx::fs::WriteFile(std::filesystem::path(kStatsFilename), outFileString.c_str(), outFileString.length());
+    PPX_LOG_ERROR("*** DATA WRITTEN? " << (res ? "YES" : "NO"));
+*/
 }

@@ -80,6 +80,7 @@ private:
 
 std::optional<std::vector<char>> load_file(const std::filesystem::path& path);
 bool                             path_exists(const std::filesystem::path& path);
+std::filesystem::path            GetValidPathToFile(const std::filesystem::path& path);
 
 } // namespace ppx::fs
 
