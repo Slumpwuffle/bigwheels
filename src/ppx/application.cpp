@@ -982,6 +982,11 @@ int Application::Run(int argc, char** argv)
         mMaxFrame = mStandardOptions.frame_count;
     }
 
+    mRunDuration = std::chrono::milliseconds::max;
+    if (mStandardOptions.run_time_ms != -1) {
+        mRunDuration = std::chrono::milliseconds(mStandardOptions.run_time_ms);
+    }
+
     // Disable ImGui in headless mode.
     if (mSettings.headless && mSettings.enableImGui) {
         mSettings.enableImGui = false;
